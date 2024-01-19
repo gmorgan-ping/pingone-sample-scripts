@@ -1,99 +1,93 @@
-const rp = require('request-promise'),
-      moment = require('moment-timezone'),
-      fs = require('fs');
+const axios = require('axios');
+const moment = require('moment-timezone');
+const fs = require('fs').promises;
 
 const STATUS_FILE = "/Applications/Splunk/bin/scripts/status.json";
-const ENV_ID = "your-env-id";
-const CLIENT_ID = "your-client-id";
-const CLIENT_SECRET = "your-client-secret";
+const ENV_ID = process.env.PINGONE_ENV_ID;
+const CLIENT_ID = process.env.PINGONE_CLIENT_ID;
+const CLIENT_SECRET = process.env.PINGONE_CLIENT_SECRET;
+
+const PING_ONE_REGIONS = {
+    'NA': 'com',
+    'CA': 'ca',
+    'EU': 'eu',
+    'AP': 'asia'
+}
+
+const PING_ONE_DOMAIN = PING_ONE_REGIONS['NA'];
+
 const tokenAuthRequestOptions = {
     method: 'POST',
-    uri: `https://auth.pingone.com/${ENV_ID}/as/token`,
-    port: 443,
+    url: `https://auth.pingone.${PING_ONE_DOMAIN}/${ENV_ID}/as/token`,
     headers: {
         'Cache-Control': 'no-cache',
         'Content-Type': 'application/x-www-form-urlencoded'
     },
-    form: {
-        grant_type: 'client_credentials',
-        scope: 'p1:read:env:activity',
-        client_id: `${CLIENT_ID}`,
-        client_secret: `${CLIENT_SECRET}`
-    },
-    json: true
+    data: `grant_type=client_credentials&scope=p1:read:env:activity&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}`
 };
 
 const activitiesRequestOptions = (accessToken, accessTokenType, range) => {
-    var json = {
+    const url = `https://api.pingone.${PING_ONE_DOMAIN}/v1/environments/${ENV_ID}/activities?filter=createdat%20ge%20%22{lowerbound}%22%20and%20createdat%20le%20%22{upperbound}%22&limit=500`;
+    if (!range) {
+        range = [
+            moment().tz('utc').subtract(5, 'minutes').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z',
+            moment().tz('utc').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z'
+        ];
+    }
+    return {
         method: 'GET',
-        uri: `https://api.pingone.com/v1/environments/${ENV_ID}/activities?filter=createdat%20ge%20%22{lowerbound}%22%20and%20createdat%20le%20%22{upperbound}%22&limit=500`,
-        port: 443,
+        url,
         headers: {
             'Cache-Control': 'no-cache',
             'Content-Type': 'application/x-www-form-urlencoded',
             'Authorization': `${accessTokenType} ${accessToken}`
         },
-        json: true,
+        params: { lowerbound: range[0], upperbound: range[1] },
         forever: true
     };
-    if (!range) {
-        range = [moment().tz('utc').subtract(5, 'minutes').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z', moment().tz('utc').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z'];
-    }
-    json.uri = json.uri.replace("{lowerbound}", range[0])
-                       .replace("{upperbound}", range[1]);
-    return json;
 };
 
-// given a range, get all activities for that range
 const getAllActivities = async (range) => {
-    var options;
     let done = false;
-    var token = null;
-    var count = 0;
-    let startApp = new Date();
+    let token = null;
+    let count = 0;
+
     while (!done) {
-        let start = new Date();
         if (!token) {
             try {
-                // get the token response
-                token = await rp(tokenAuthRequestOptions);
-
-                let uri = (options) ? options.uri : null;
-                options = activitiesRequestOptions(token.access_token, token.token_type, range);
+                const tokenResponse = await axios(tokenAuthRequestOptions);
+                const uri = options ? options.uri : null;
+                options = activitiesRequestOptions(tokenResponse.data.access_token, tokenResponse.data.token_type, range);
                 if (uri) options.uri = uri;
             } catch (err) {
-                // this shouldn't happen but life is unpredictable, so quit the loop if it does.
-                console.error("failed to get token for some unexpected reason", err);
-                done = true;    
+                console.error("Failed to get token for some unexpected reason", err);
+                done = true;
             }
         }
-        try {
-            // get results for current run
-            var results = await rp(options);
-            count++;
-            var end = new Date();
 
-            // prep the next cursor for next iteration
-            if (results._links && results._links.next && results._links.next.href) {
-                options.uri = results._links.next.href;
+        try {
+            const results = await axios(options);
+            count++;
+            const end = new Date();
+
+            if (results.data._links && results.data._links.next && results.data._links.next.href) {
+                options.url = results.data._links.next.href;
             } else {
                 done = true;
                 return range;
             }
-            // print results
-            let activities = results._embedded.activities;
-            let stringResults = JSON.stringify(activities);
-            let finalContent = ((count === 1) ? "[" : "") + stringResults.substring(1, stringResults.length - 1);
-            finalContent += (done) ? ']' : ', ';
+
+            const activities = results.data._embedded.activities;
+            const stringResults = JSON.stringify(activities);
+            const finalContent = (count === 1 ? "[" : "") + stringResults.substring(1, stringResults.length - 1);
+            finalContent += done ? ']' : ', ';
             console.log(finalContent);
         } catch (err) {
-            // console.log('err', err);
-            if (err.statusCode === 401 || err.statusCode === 403) {
-                // token expired, let's reset it so a new one will be fetched at the beginning of the loop.
+            if (err.response && (err.response.status === 401 || err.response.status === 403)) {
                 token = null;
             } else {
                 done = true;
-                console.error("unexpected error. quitting loop", err);
+                console.error("Unexpected error. Quitting loop", err);
             }
         }
     }
@@ -138,18 +132,18 @@ const updateStatus = async (status, request) => {
 };
 const addRequest = (status, request) => {
     // don't add a dup
-    if (status.requested.filter(r =>  r[0] === request[0] && r[1] === request[1]).length === 0) {
+    if (status.requested.filter(r => r[0] === request[0] && r[1] === request[1]).length === 0) {
         status.requested = status.requested.concat([request]);
     }
 };
 // Prune the finished list:
 // if [n].end == [n+1].start => [n].end = [n+1].end, remove [n+1].
 const balanceStatus = async (status) => {
-    status.finished = status.finished.reduce((p,c) => {
+    status.finished = status.finished.reduce((p, c) => {
         if (!p.length) {
             p.push(c);
-        } else if (p[p.length-1][1] == c[0]) {
-            p[p.length-1][1] = c[1]
+        } else if (p[p.length - 1][1] == c[0]) {
+            p[p.length - 1][1] = c[1]
         } else {
             p.push(c);
         }
@@ -174,9 +168,9 @@ const fsWrite = (filename, content) => {
         });
     });
 };
+
 const fsRead = (filename) => {
     return new Promise((resolve, reject) => {
-        fs.p
         fs.readFile(filename, (err, content) => {
             if (err) reject(err);
             else resolve(content);
@@ -184,32 +178,31 @@ const fsRead = (filename) => {
     });
 };
 
-// main program
+const rp = axios;
+
+// Main program
 const program = async () => {
     await initRequest();
-    let status = await getStatus();
-    let finished = {};
-    // iterate through every range in the requested node
-    for (var i = 0; i < status.requested.length; i++) {
-        let range = status.requested[i];
-        let result = await getAllActivities(range);
+    const status = await getStatus();
+    const finished = {};
+
+    for (const range of status.requested) {
+        const result = await getAllActivities(range);
         if (result) {
-            // add this range to the finished list
-            finished[range[0]+range[1]] = result;
+            finished[range[0] + range[1]] = result;
         }
 
-        // update anything that finished from requested to finished.
-        let updatedStatus = status.requested.reduce((p,c) => {
-            if (c[0]+c[1] in finished) {
-                p.finished = p.finished.concat([c]);
+        const updatedStatus = status.requested.reduce((p, c) => {
+            if (c[0] + c[1] in finished) {
+                p.finished.push(c);
             } else {
-                p.requested = p.requested.concat([c]);
+                p.requested.push(c);
             }
             return p;
-        }, {"requested": [], "finished": status.finished});
+        }, { requested: [], finished: status.finished });
+
         updateStatus(updatedStatus);
     }
 };
 
-// run the program
 program().catch(console.error);
