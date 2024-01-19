@@ -2,9 +2,9 @@
   "name": "pingone-sample-scripts",
   "version": "1.0.0",
   "description": "",
-  "main": "poll-activities.js",
+  "main": "poll_activities.js",
   "scripts": {
-    "test": "node poll-activities.js"
+    "test": "node poll_activities.js"
   },
   "dependencies": {
     "axios": "^0.24.0",
