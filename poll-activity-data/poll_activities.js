@@ -7,7 +7,7 @@ const ENV_ID = process.env.PINGONE_ENV_ID;
 const CLIENT_ID = process.env.PINGONE_CLIENT_ID;
 const CLIENT_SECRET = process.env.PINGONE_CLIENT_SECRET;
 const REGION = process.env.PINGONE_REGION;
-const DATA_PERIOD = 2;
+const DATA_PERIOD_MINUTES = 5;
 
 
 const PING_ONE_REGIONS = {
@@ -37,7 +37,7 @@ const activitiesRequestOptions = (accessToken, accessTokenType, range) => {
 
   if (!range) {
     range = [
-      moment().tz('utc').subtract(DATA_PERIOD, 'minutes').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z',
+      moment().tz('utc').subtract(DATA_PERIOD_MINUTES, 'minutes').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z',
       moment().tz('utc').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z'
     ];
   }
@@ -73,9 +73,9 @@ const getAllActivities = async (range) => {
           invalidTokenCount = 0;
         }
         const uri = options ? options.url : null;
-        
+
         options = activitiesRequestOptions(tokenResponse.data.access_token, tokenResponse.data.token_type, range);
-        
+
         if (uri) options.url = uri;
       } catch (err) {
         console.error("Failed to get token for some unexpected reason", err);
@@ -104,7 +104,7 @@ const getAllActivities = async (range) => {
 
     } catch (err) {
       // console.log('err', err);
-      
+
       if (err.response && (err.response.status === 401 || err.response.status === 403)) {
         // token expired, let's reset it so a new one will be fetched at the beginning of the loop.
         token = null;
@@ -125,7 +125,7 @@ const getAllActivities = async (range) => {
 //***********************************//
 const initRequest = async () => {
   let status = { requested: [], finished: [] };
-  let startDate = moment().tz('utc').startOf('minute').subtract(DATA_PERIOD, 'minutes').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z';
+  let startDate = moment().tz('utc').startOf('minute').subtract(DATA_PERIOD_MINUTES, 'minutes').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z';
   let endDate = moment().tz('utc').startOf('minute').format('YYYY-MM-DDTHH:mm:ss.SSS') + 'Z';
   try {
     let savedStatus = await getStatus();

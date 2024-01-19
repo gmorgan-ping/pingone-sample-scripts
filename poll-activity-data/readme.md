@@ -34,3 +34,12 @@ description = json audit events
 pulldown_type = 1
 ```
 (where `test` is the "source type" in splunk)
+
+## Splunk Queries
+```
+index="_internal" error get_activities.py
+```
+
+```
+source="/opt/splunk/bin/scripts/get_activities.py"
+```
